@@ -1,47 +1,43 @@
-name: Build Windows ISO
+name: Build Windows 11 26H1 ISO
 
 on:
   workflow_dispatch:
   push:
-    paths:
-      - 'uup_download_linux.sh'
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     permissions:
       contents: write
     steps:
       - name: 检出仓库
         uses: actions/checkout@v4
 
-      - name: 深度清理磁盘空间 (释放 30GB+)
+      - name: 执行 UUP 下载与原生 DISM 压制
+        shell: cmd
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force
-          df -h
+          call uup_download_windows.cmd
 
-      - name: 安装压制依赖
+      - name: 分卷切片 (绕过 GitHub 2GB 单文件限制)
+        shell: pwsh
         run: |
-          sudo apt-get update
-          sudo apt-get install -y aria2 cabextract wimtools chntpw genisoimage
+          $iso = Get-ChildItem -Filter *.iso | Select-Object -First 1
+          if (-not $iso) {
+            Write-Error "ISO 文件未生成！"
+            exit 1
+          }
+          Write-Host "找到生成文件: $($iso.FullName) (大小: $([math]::Round($iso.Length/1GB, 2)) GB)"
+          
+          # 使用 Runner 自带的 split 工具进行二进制切片
+          $splitBin = "C:\Program Files\Git\usr\bin\split.exe"
+          & $splitBin -b 1800M $iso.FullName "$($iso.Name).part_"
+          Get-ChildItem *.part_*
 
-      - name: 执行 UUP 转制与 ISO 生成
-        run: |
-          chmod +x uup_download_linux.sh
-          ./uup_download_linux.sh
-
-      - name: 分卷切片 (绕过 GitHub 2GB 限制)
-        run: |
-          ISO_FILE=$(ls *.iso | head -n 1)
-          echo "Generated ISO: $ISO_FILE"
-          split -b 1800M "$ISO_FILE" "${ISO_FILE}.part_"
-
-      - name: 上传 ISO 分卷至 GitHub Release
+      - name: 发布切片至 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: win11-26h1-release
-          name: "Windows 11 26H1 ISO Build"
+          tag_name: win11-26h1-28000.2704
+          name: "Windows 11 26H1 (Build 28000.2704) Pro ISO"
           files: "*.part_*"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
